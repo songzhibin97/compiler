@@ -1,7 +1,101 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 
+//#if _WIN32
+//#define CH_EOF '\n\r'
+//#elif __linux__
+//#define CH_EOF '\n'
+//#else
+//#define CH_EOF '\r'
+//#endif
+#define CH_EOF -1
+
+int token;
+char ch;
+FILE *fin;
+int tkvalue;
+char *filename = "";
+int line_num = 0;
+
+void get_token();
+
+char *get_tkstr(int);
+
+void preprocess();
+
+void parse_identifier();
+
+void parse_num();
+
+void parse_string(char);
+
+void skip_white_space();
+
+void parse_comment();
+
+
+enum e_ErrorLevel {
+    LEVEL_WARNING,
+    LEVEL_ERROR,
+};
+
+enum e_WorkStage {
+    STAGE_COMPILER,
+    STAGE_LINK,
+};
+
+void handle_exception(int stage, int level, char *fmt, va_list ap) {
+    char buf[1024];
+
+    vsprintf(buf, fmt, ap);
+    if (stage == STAGE_COMPILER) {
+        if (level == LEVEL_WARNING) {
+            printf("[WARNING][COMPILER]%s(line:%d): %s!\n", filename, line_num, buf);
+        } else {
+            printf("[ERROR][COMPILER]%s(line:%d): %s!\n", filename, line_num, buf);
+            exit(-1);
+        }
+    } else {
+        printf("LNK: %s!\n", buf);
+        exit(-1);
+    }
+}
+
+void warning(char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    handle_exception(STAGE_COMPILER, LEVEL_WARNING, fmt, ap);
+    va_end(ap);
+}
+
+void error(char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    handle_exception(STAGE_COMPILER, LEVEL_ERROR, fmt, ap);
+    va_end(ap);
+}
+
+void expect(char *msg) {
+    error("loss %s", msg);
+}
+
+void skip(int c) {
+    if (token != c) {
+        error("loss '%s'", get_tkstr(c));
+    }
+    get_token();
+}
+
+void link_error(char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    handle_exception(STAGE_LINK, LEVEL_ERROR, fmt, ap);
+    va_end(ap);
+}
+
+// Token code
 enum e_TokenCode {
     TK_PLUS,
     TK_MINUS,
@@ -214,6 +308,7 @@ typedef struct TkWord {
 TkWord *tk_hashtable[MAXKEY];
 DynArray tktable;
 int token;
+DynString tkstr, sourcestr;
 
 TkWord *tkWord_direct_insert(TkWord *tp) {
     int keyno;
@@ -278,6 +373,228 @@ void *mallocz(int size) {
     return ptr;
 }
 
+char *get_tkstr(int v) {
+    if (v >= tktable.count) {
+        return NULL;
+    } else if (v >= TK_CINT && v <= TK_CSTR) {
+        return "";
+    } else {
+        return ((TkWord *) tktable.data[v])->spelling;
+    }
+}
+
+void getch() {
+    int i = getc(fin);
+    ch = i;
+}
+
+void get_token() {
+    preprocess();
+    switch (ch) {
+        case 'a' :
+        case 'b' :
+        case 'c' :
+        case 'd' :
+        case 'e' :
+        case 'f' :
+        case 'g' :
+        case 'h' :
+        case 'i' :
+        case 'j' :
+        case 'k' :
+        case 'l' :
+        case 'm' :
+        case 'n' :
+        case 'o' :
+        case 'p' :
+        case 'q' :
+        case 'r' :
+        case 's' :
+        case 't' :
+        case 'u' :
+        case 'v' :
+        case 'w' :
+        case 'x' :
+        case 'y' :
+        case 'z' :
+        case 'A' :
+        case 'B' :
+        case 'C' :
+        case 'D' :
+        case 'E' :
+        case 'F' :
+        case 'G' :
+        case 'H' :
+        case 'I' :
+        case 'J' :
+        case 'K' :
+        case 'L' :
+        case 'M' :
+        case 'N' :
+        case 'O' :
+        case 'P' :
+        case 'Q' :
+        case 'R' :
+        case 'S' :
+        case 'T' :
+        case 'U' :
+        case 'V' :
+        case 'W' :
+        case 'X' :
+        case 'Y' :
+        case 'Z' :
+        case '_': {
+            TkWord *tp;
+            parse_identifier();
+            tp = tkWord_insert(tkstr.data);
+            token = tp->tkcode;
+            break;
+        }
+        case '0' :
+        case '1' :
+        case '2' :
+        case '3' :
+        case '4' :
+        case '5' :
+        case '6' :
+        case '7' :
+        case '8' :
+        case '9': {
+            parse_num();
+            token = TK_CINT;
+            break;
+        }
+        case '+':
+            getch();
+            token = TK_PLUS;
+            break;
+        case '-':
+            getch();
+            if (ch == '>') {
+                token = TK_POINTSTO;
+                getch();
+            } else {
+                token = TK_MINUS;
+            }
+            break;
+        case '/':
+            token = TK_DIVIDE;
+            getch();
+            break;
+        case '%':
+            token = TK_MOD;
+            getch();
+            break;
+        case '=':
+            getch();
+            if (ch == '=') {
+                token = TK_EQ;
+                getch();
+            } else {
+                token = TK_ASSIGN;
+            }
+            break;
+        case '!':
+            getch();
+            if (ch == '=') {
+                token = TK_NEQ;
+                getch();
+            } else {
+                error("now we can't support '!'");
+            }
+            break;
+        case '<':
+            getch();
+            if (ch == '=') {
+                token = TK_LEQ;
+                getch();
+            } else {
+                token = TK_LT;
+            }
+            break;
+        case '>':
+            getch();
+            if (ch == '=') {
+                token = TK_GEQ;
+                getch();
+            } else {
+                token = TK_GT;
+            }
+            break;
+        case '.':
+            getch();
+            if (ch == '.') {
+                getch();
+                if (ch != '.') {
+                    error("is '...' you want to write");
+                } else {
+                    token = TK_ELLIPSIS;
+                    getch();
+                }
+                getch();
+            } else {
+                token = TK_DOT;
+            }
+            break;
+        case '&':
+            token = TK_AND;
+            getch();
+            break;
+        case ';':
+            token = TK_SEMICOLON;
+            getch();
+            break;
+        case ']':
+            token = TK_CLOSEBR;
+            getch();
+            break;
+        case '}':
+            token = TK_END;
+            getch();
+            break;
+        case ')':
+            token = TK_CLOSEPA;
+            getch();
+            break;
+        case '[':
+            token = TK_OPENBR;
+            getch();
+            break;
+        case '{':
+            token = TK_BEGIN;
+            getch();
+            break;
+        case '(':
+            token = TK_OPENPA;
+            getch();
+            break;
+        case ',':
+            token = TK_COMMA;
+            getch();
+            break;
+        case '*':
+            token = TK_STAR;
+            getch();
+            break;
+        case '\'':
+            parse_string(ch);
+            token = TK_CCHAR;
+            tkvalue = *(char *) tkstr.data;
+            break;
+        case '\"':
+            parse_string(ch);
+            token = TK_CSTR;
+            break;
+        case EOF:
+            token = TK_EOF;
+            break;
+        default:
+            error("understand this char: \\x%02x", ch);
+            getch();
+            break;
+    }
+}
+
 void init_lex() {
     TkWord *tp;
     static TkWord keywords[] = {
@@ -331,22 +648,251 @@ void init_lex() {
             {0,            NULL, NULL,          NULL, NULL},
     };
 
-    dynArray_init(&tktable,50);
-    for (tp = &keywords[0];tp->spelling !=NULL;tp++) {
+    dynArray_init(&tktable, 50);
+    for (tp = &keywords[0]; tp->spelling != NULL; tp++) {
         tkWord_direct_insert(tp);
     }
 }
 
-int main() {
-    init_lex();
+void preprocess() {
+    while (1) {
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+            skip_white_space();
+        } else if (ch == '/') {
+            getch();
+            if (ch == '*' || ch == '/') {
+                parse_comment();
+            } else {
+                ungetc(ch, fin);
+                ch = '/';
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+}
 
+void parse_comment() {
+    if (ch == '/') {
+        while (1) {
+            getch();
+            if (ch == '\n') {
+                line_num++;
+                getch();
+                return;
+            } else if (ch == CH_EOF) {
+                error("loss the right end-sign of '*/'");
+                return;
+            }
+        }
+    }
+    getch();
+    do {
+        do {
+            if (ch == '\n' || ch == '*' || (ch == CH_EOF)) {
+                break;
+            } else {
+                getch();
+            }
+        } while (1);
+        if (ch == '\n') {
+            line_num++;
+            getch();
+        } else if (ch == '*') {
+            getch();
+            if (ch == '/') {
+                getch();
+                return;
+            }
+        } else {
+            error("loss the right end-sign of '*/'");
+            return;
+        }
+    } while (1);
+}
+
+void skip_white_space() {
+    while (1) {
+        if (ch == ' ' || ch == '\t') {
+            getch();
+            continue;
+        }
+#if __APPLE__
+        if (ch == '\n') {
+            line_num++;
+            getch();
+            continue;
+        }
+#elif __linux__
+        if (ch == '\n') {
+            line_num++;
+            getch();
+            continue;
+        }
+#else
+        if (ch == '\r') {
+            getch();
+            if (ch != '\n') {
+                return;
+            }
+            line_num++;
+            getch();
+            continue;
+        }
+#endif
+        break;
+    }
+}
+
+int is_nodigit(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c == '_');
+}
+
+int is_digit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+void parse_identifier() {
+    dynstring_reset(&tkstr);
+    dynstring_chcat(&tkstr, ch);
+    getch();
+    while (is_nodigit(ch) || is_digit(ch)) {
+        dynstring_chcat(&tkstr, ch);
+        getch();
+    }
+    dynstring_chcat(&tkstr, '\0');
+}
+
+// todo: atof
+void parse_num() {
+    dynstring_reset(&tkstr);
+    dynstring_reset(&sourcestr);
+    do {
+        dynstring_chcat(&tkstr, ch);
+        dynstring_chcat(&sourcestr, ch);
+        getch();
+    } while (is_digit(ch));
+    if (ch == '.') {
+        do {
+            dynstring_chcat(&tkstr, ch);
+            dynstring_chcat(&sourcestr, ch);
+            getch();
+        } while (is_digit(ch));
+    }
+    dynstring_chcat(&tkstr, '\0');
+    dynstring_chcat(&sourcestr, '\0');
+    tkvalue = atoi(tkstr.data);
+};
+
+void parse_string(char sep) {
+    char c;
+    dynstring_reset(&tkstr);
+    dynstring_reset(&sourcestr);
+    dynstring_chcat(&sourcestr, sep);
+    getch();
+    while (1) {
+        if (ch == sep) {
+            break;
+        } else if (ch == '\\') {
+            // change mean
+            dynstring_chcat(&sourcestr, ch);
+            getch();
+            switch (ch) {
+                case '0':
+                    c = '\0';
+                    break;
+                case 'a':
+                    c = '\a';
+                    break;
+                case 'b':
+                    c = '\b';
+                    break;
+                case 't':
+                    c = '\t';
+                    break;
+                case 'n':
+                    c = '\n';
+                    break;
+                case 'v':
+                    c = '\v';
+                    break;
+                case 'f':
+                    c = '\f';
+                    break;
+                case 'r':
+                    c = '\r';
+                    break;
+                case '\"':
+                    c = '\"';
+                    break;
+                case '\'':
+                    c = '\'';
+                    break;
+                case '\\':
+                    c = '\\';
+                    break;
+                default:
+                    c = ch;
+                    if (c>='!' && c<='~'){
+                        warning("it's illegal change mean: \'\\%c\'",c);
+                    }else{
+                        warning("it's illegal change mean: \'\\0x%x\'",c);
+                    }
+                    break;
+            }
+            dynstring_chcat(&tkstr,c);
+            dynstring_chcat(&sourcestr,ch);
+            getch();
+        }else{
+            dynstring_chcat(&tkstr,ch);
+            dynstring_chcat(&sourcestr,ch);
+            getch();
+        }
+    }
+    dynstring_chcat(&tkstr,'\0');
+    dynstring_chcat(&sourcestr,sep);
+    dynstring_chcat(&sourcestr,'\0');
+    getch();
+}
+
+void init(){
+    line_num = 1;
+    init_lex();
+}
+
+void cleanup(){
+    int i;
+    printf("\n tktable.count=%d\n",tktable.count);
+    for (i = TK_IDENT; i<tktable.count ; ++i) {
+        free(tktable.data[i]);
+    }
+    free(tktable.data);
+}
+
+int main(int argc,char **argv) {
+    fin = fopen(argv[1],"rb");
+    if (!fin){
+        printf("不能打开sc源文件!\n");
+        return 0;
+    }
+    init();
+    getch();
+    do {
+        get_token();
+    }while(token!=TK_EOF);
+    printf("lines of code: %d line\n",line_num);
+
+    cleanup();
+    fclose(fin);
+    printf("%s 词法分析成功！",argv[1]);
     return 0;
 }
 
 
 
-
-
+// 'A':case'B':case'C':case'D':case'E':case'F':case'G':case'H':case'I':case'J':case'K':case'L':case'M':case'N':case'O':case'P':case'Q':case'R':case'S':case'T':case'U':case'V':case'W':case'X':case'Y':case'Z'
+// '0':case'1':case'2':case'3':case'4':case'5':case'6':case'7':case'8':case'9'
 
 
 
