@@ -834,58 +834,597 @@ void parse_string(char sep) {
                     break;
                 default:
                     c = ch;
-                    if (c>='!' && c<='~'){
-                        warning("it's illegal change mean: \'\\%c\'",c);
-                    }else{
-                        warning("it's illegal change mean: \'\\0x%x\'",c);
+                    if (c >= '!' && c <= '~') {
+                        warning("it's illegal change mean: \'\\%c\'", c);
+                    } else {
+                        warning("it's illegal change mean: \'\\0x%x\'", c);
                     }
                     break;
             }
-            dynstring_chcat(&tkstr,c);
-            dynstring_chcat(&sourcestr,ch);
+            dynstring_chcat(&tkstr, c);
+            dynstring_chcat(&sourcestr, ch);
             getch();
-        }else{
-            dynstring_chcat(&tkstr,ch);
-            dynstring_chcat(&sourcestr,ch);
+        } else {
+            dynstring_chcat(&tkstr, ch);
+            dynstring_chcat(&sourcestr, ch);
             getch();
         }
     }
-    dynstring_chcat(&tkstr,'\0');
-    dynstring_chcat(&sourcestr,sep);
-    dynstring_chcat(&sourcestr,'\0');
+    dynstring_chcat(&tkstr, '\0');
+    dynstring_chcat(&sourcestr, sep);
+    dynstring_chcat(&sourcestr, '\0');
     getch();
 }
 
-void init(){
+void init() {
     line_num = 1;
     init_lex();
 }
 
-void cleanup(){
+void cleanup() {
     int i;
-    printf("\n tktable.count=%d\n",tktable.count);
-    for (i = TK_IDENT; i<tktable.count ; ++i) {
+    printf("\n tktable.count=%d\n", tktable.count);
+    for (i = TK_IDENT; i < tktable.count; ++i) {
         free(tktable.data[i]);
     }
     free(tktable.data);
 }
 
-int main(int argc,char **argv) {
-    fin = fopen(argv[1],"rb");
-    if (!fin){
+// 句(语)法分析
+int SC_GLOBAL = 0, SC_LOCAL = 1,SC_MEMBER;
+
+// 翻译单元 --> {外部声明}文件结束符
+void translation_unit();
+
+// <外部声明> --> <函数定义>|<声明>
+void external_declaration(int);
+
+// <函数定义> --> <类型区分符><声明符><函数体>
+// <函数体> --> <复合语句>
+// <声明> --> <类型区分符>[<初值声明符表>]<分号>
+// <初值声明符表> --> <初值声明符>{<逗号><初值声明符>}
+// <初值声明符> --> <声明符>|<声明符><赋值运算符'='><初值符>
+// 变换文法定义到LL(1) ==>> 提取共有左部<类型区分符>
+// <外部声明> --> <类型区分符>(<声明符><函数体>|[<初值声明符表>]<分号>)
+// 扩展 <外部声明> --> <类型区分符>(<声明符><函数体>|<分号>|
+// <声明符>[<赋值运算符'='><初值符>]{<逗号><声明符>[<赋值运算符'='><初值符>]}<分号>)
+
+//<类型区分符> --> <数据类型>|<结构区分符>
+int type_specifier();
+
+//<声明符> --> {<指针>}[<调用约定>][<结构成员对齐>]<直接声明符>
+void declarator();
+
+//<调用约定> --> <__cdecl>|<__stdcall>
+void function_calling_convention(int *);
+
+//<结构成员对齐> --> <__align>'('<整数常量>')'
+void struct_member_alignment();
+
+//<直接声明符> --> <标识符><直接声明符后缀>
+void direct_declarator();
+
+//<直接声明符后缀> --> {'['']'|'['<整数常量>']'|'('')'|'('<形参表>')'}
+void direct_declarator_postfix();
+
+//<形参表> --> <参数表>|<参数表>',''...'
+//<参数表> --> <参数声明>{','<参数声明>}
+//<参数声明> --> <类型区分符>{<声明符>}
+void parameter_type_list();
+
+//<函数体> --> <复合语句>
+void funcbody();
+
+//<复合语句> --> '{' {<声明>}{<语句>} '}'
+void compound_statement();
+
+//<初值符> --> <赋值表达式>
+void initializer();
+
+void assignment_expression();
+
+//<结构区分符> --> <struct关键字><标识符>'{'<结构声明表>'}'|<struct关键字><标识符>
+void struct_specifier();
+
+//<结构声明表> --> <结构声明>{<结构声明>}
+void struct_declaration_list();
+
+//<结构声明> --> <类型区分符>{<结构声明符表>}';'
+//<结构声明符表> --> <声明符>{','<声明符>}
+void struct_declaration(int *, int *);
+
+// ......
+void translation_unit() {
+    while (token != TK_EOF) {
+        external_declaration(SC_GLOBAL);
+    }
+}
+
+void external_declaration(int l) {
+    if (!type_specifier()) {
+        expect("<类型区分符>");
+    }
+
+    if (token == TK_SEMICOLON) {
+        get_token();
+        return;
+    }
+    while (1) {
+        declarator();
+        if (token == TK_BEGIN) {
+            if (l == SC_LOCAL) {
+                error("不支持嵌套定义");
+            }
+            funcbody();
+            break;
+        } else {
+            if (token == TK_ASSIGN) {
+                get_token();
+                initializer();
+            }
+            if (token == TK_COMMA) {
+                get_token();
+            } else {
+                skip(TK_SEMICOLON);
+                break;
+            }
+        }
+    }
+}
+
+int type_specifier() {
+    int type_found = 0;
+    switch (token) {
+        case KW_CHAR:
+        case KW_SHORT:
+        case KW_VOID:
+        case KW_INT:
+            type_found = 1;
+            get_token();
+            break;
+        case KW_STRUCT:
+            struct_specifier();
+            type_found = 1;
+            break;
+        default:
+            break;
+    }
+    return type_found;
+}
+
+void struct_specifier() {
+    int v;
+    get_token();
+    v = token;
+    get_token();
+    if (v < TK_IDENT) {
+        expect("结构体名字不能是关键字");
+    }
+    if (token == TK_BEGIN) {
+        struct_declaration_list();
+    }
+}
+
+void struct_declaration_list() {
+    int maxalign, offset;
+    get_token();
+    while (token != TK_END) {
+        struct_declaration(&maxalign, &offset);
+    }
+    skip(TK_END);
+}
+
+void struct_declaration(int *a, int *b) {
+    type_specifier();
+    while (1) {
+        declarator();
+        if (token == TK_SEMICOLON) {
+            break;
+        }
+        skip(TK_COMMA);
+    }
+    skip(TK_SEMICOLON);
+}
+
+void function_calling_convention(int *fc) {
+    *fc = KW_CDECL;
+    if (token == KW_CDECL || token == KW_STDCALL) {
+        *fc = token;
+        get_token();
+    }
+}
+
+void struct_member_alignment() {
+    if (token == KW_ALIGN) {
+        get_token();
+        skip(TK_OPENPA);
+        if (token == TK_CINT) {
+            get_token();
+        } else {
+            expect("常数整亮");
+        }
+        skip(TK_CLOSEPA);
+    }
+}
+
+void declarator() {
+    int fc;
+    while (token == TK_STAR) {
+        get_token();
+    }
+    function_calling_convention(&fc);
+    struct_member_alignment();
+    direct_declarator();
+}
+
+void direct_declarator() {
+    if (token >= TK_IDENT) {
+        get_token();
+    } else {
+        expect("标识符");
+    }
+    direct_declarator_postfix();
+}
+
+void direct_declarator_postfix() {
+    int n;
+    if (token == TK_OPENPA) {
+        parameter_type_list();
+    } else if (token == TK_OPENBR) {
+        get_token();
+        if (token == TK_CINT) {
+            get_token();
+            n = tkvalue;
+        }
+        skip(TK_CLOSEBR);
+        direct_declarator_postfix();
+    }
+}
+
+void parameter_type_list() {
+    get_token();
+    while (token != TK_CLOSEPA) {
+        if (!type_specifier()) {
+            error("无效类型标识符");
+        }
+        declarator();
+        if (token == TK_CLOSEPA) {
+            break;
+        }
+        skip(TK_COMMA);
+        if (token == TK_ELLIPSIS) {
+            get_token();
+            break;
+        }
+    }
+    skip(TK_CLOSEPA);
+}
+
+void funcbody() {
+    compound_statement();
+}
+
+void initializer() {
+    assignment_expression();
+}
+
+//<语句> --> {<复合语句>|<if>|<for>|
+// <break>|<continue>|<return>|<表达式语句>}
+void statement();
+
+//<复合语句> --> '{' {<声明>}{<语句>} '}'
+void compound_statement();
+
+//<if> --> 'if''('<表达式>')'<语句>['else'<语句>]
+void if_statement();
+
+//<for> --> 'for''('<表达式语句><表达式语句><表达式语句>')'<语句>
+void for_statement();
+
+//<break> --> 'break' ';'
+void break_statement();
+
+//<continue> --> 'continue' ';'
+void continue_statement();
+
+//<return> --> 'return' <expression> ';'
+void return_statement();
+
+//<表达式语句> --> [<expression>]';'
+void expression_statement();
+
+int is_type_specifier(int);
+
+//<表达式> --> <赋值表达式>{','<赋值表达式>}
+void expression();
+
+//<赋值表达式> --> <相等类表达式>|<一元表达式>'='<赋值表达式>
+//<相等类表达式> ==>>(n) <一元表达式> ......
+// 非等价变换后 <赋值表达式> --> <相等类表达式>|<一元表达式>'='<赋值表达式>
+// 有隐患 但在语义分析阶段处理
+void assignment_expression();
+
+//<相等类表达式> --> <关系表达式>{'=='<关系表达式>|'!='<关系表达式>}
+void equality_expression();
+
+//<关系表达式> --> <加减类表达式>{'<'<加减类表达式>|'>'<加减类表达式>|
+// '<='<加减类表达式>|'>='<加减类表达式>}
+void relational_expression();
+
+//<加减类表达式> --> <乘除类表达式>{'+'<乘除类表达式>|'-'<乘除类表达式>}
+void additive_expression();
+
+//<乘除表达式> --> <一元表达式>{'*'<一元表达式>|'/'<一元表达式>|'%'<一元表达式>}
+void multiplicative_expression();
+
+//<一元表达式> --> <后缀表达式>|'&'<一元表达式>|'*'<一元表达式>|'+'<一元表达式>|'-'<一元表达式>|<sizeof表达式>
+void unary_expression();
+
+//<后缀表达式> --> <初等表达式>{'['<expression>']'|'('')'|'('<实参表达式>')'
+//|'.'IDENTIFIER|'->'IDENTIFIER}
+void postfix_expression();
+// <初等表达式> --> <标识符>|<整数常量>|<字符串常量>|<字符常量>|(<表达式>)
+void primary_expression();
+// <实参表达式> --> <赋值表达式>{','<赋值表达式>}
+void argument_expression_list();
+//<sizeof表达式> ==>> 'struct''('<类型区别符>')'
+void sizeof_expression();
+
+
+void statement() {
+    switch (token) {
+        case TK_BEGIN:
+            compound_statement();
+            break;
+        case KW_IF:
+            if_statement();
+            break;
+        case KW_FOR:
+            for_statement();
+            break;
+        case KW_BREAK:
+            break_statement();
+            break;
+        case KW_CONTINUE:
+            continue_statement();
+            break;
+        case KW_RETURN:
+            return_statement();
+            break;
+        default:
+            expression_statement();
+            break;
+    }
+}
+
+void compound_statement() {
+    get_token();
+    while (is_type_specifier(token)) {
+        external_declaration(SC_LOCAL);
+    }
+    while (token != TK_END) {
+        statement();
+    }
+    get_token();
+}
+
+int is_type_specifier(int v) {
+    switch (v) {
+        case KW_CHAR:
+        case KW_SHORT:
+        case KW_INT:
+        case KW_VOID:
+        case KW_STRUCT:
+            return 1;
+        default:
+            break;
+    }
+    return 0;
+}
+
+void expression_statement() {
+    if (token != TK_SEMICOLON) {
+        expression();
+    }
+    skip(TK_SEMICOLON);
+}
+
+void if_statement() {
+    get_token();
+    skip(TK_OPENPA);
+    expression();
+    skip(TK_CLOSEPA);
+    statement();
+    if (token == KW_ELSE) {
+        get_token();
+        statement();
+    }
+}
+
+void for_statement() {
+    get_token();
+    skip(TK_OPENPA);
+    if (token != TK_SEMICOLON) {
+        expression();
+    }
+    skip(TK_SEMICOLON);
+    if (token != TK_SEMICOLON) {
+        expression();
+    }
+    skip(TK_SEMICOLON);
+    if (token != TK_SEMICOLON) {
+        expression();
+    }
+    skip(TK_CLOSEPA);
+    statement();
+}
+
+void continue_statement() {
+    get_token();
+    skip(TK_SEMICOLON);
+}
+
+void break_statement() {
+    get_token();
+    skip(TK_SEMICOLON);
+}
+
+void return_statement() {
+    get_token();
+    if (token != TK_SEMICOLON) {
+        expression();
+    }
+    skip(TK_SEMICOLON);
+}
+
+void expression() {
+    while (1) {
+        assignment_expression();
+        if (token != TK_COMMA) {
+            break;
+        }
+        get_token();
+    }
+}
+
+void assignment_expression() {
+    equality_expression();
+    if (token == TK_ASSIGN) {
+        get_token();
+        assignment_expression();
+    }
+}
+
+void equality_expression() {
+    relational_expression();
+    while (token == TK_EQ || token == TK_NEQ) {
+        get_token();
+        relational_expression();
+    }
+}
+
+void relational_expression() {
+    additive_expression();
+    while (token == TK_LT || token == TK_LEQ ||
+           token == TK_GT || token == TK_GEQ) {
+        get_token();
+        additive_expression();
+    }
+}
+
+void additive_expression() {
+    multiplicative_expression();
+    while (token == TK_PLUS || token == TK_MINUS) {
+        get_token();
+        multiplicative_expression();
+    }
+}
+
+void multiplicative_expression() {
+    unary_expression();
+    while (token == TK_STAR || token == TK_DIVIDE || token == TK_MOD) {
+        get_token();
+        unary_expression();
+    }
+}
+
+void unary_expression() {
+    switch (token) {
+        case TK_AND:
+        case TK_STAR:
+        case TK_PLUS:
+        case TK_MINUS:
+            get_token();
+            unary_expression();
+            break;
+        case KW_SIZEOF:
+            sizeof_expression();
+            break;
+        default:
+            postfix_expression();
+            break;
+    }
+}
+
+void sizeof_expression() {
+    get_token();
+    skip(TK_OPENPA);
+    type_specifier();
+    skip(TK_CLOSEPA);
+}
+
+void postfix_expression() {
+    primary_expression();
+    while(1){
+        if (token == TK_DOT || token ==TK_POINTSTO){
+            get_token();
+            token |= SC_MEMBER;
+            get_token();
+        }else if (token == TK_OPENBR){
+            get_token();
+            expression();
+            skip(TK_CLOSEBR);
+        }else if (token == TK_OPENPA){
+            argument_expression_list();
+        }else{
+            break;
+        }
+    }
+}
+
+void primary_expression(){
+    int t;
+    switch (token) {
+        case TK_CINT:
+        case TK_CCHAR:
+        case TK_CSTR:
+            get_token();
+            break;
+        case TK_OPENPA:
+            get_token();
+            expression();
+            skip(TK_CLOSEPA);
+        default:
+            t = token;
+            get_token();
+            if (t<TK_IDENT){
+                expect("标识符或常量");
+            }
+            break;
+    }
+}
+
+void argument_expression_list(){
+    get_token();
+    if (token != TK_CLOSEPA){
+        while(1){
+            assignment_expression();
+            if (token == TK_CLOSEPA){
+                break;
+            }
+            skip(TK_COMMA);
+        }
+    }
+    skip(TK_CLOSEPA);
+}
+
+
+
+
+int main(int argc, char **argv) {
+    fin = fopen(argv[1], "rb");
+    if (!fin) {
         printf("不能打开sc源文件!\n");
         return 0;
     }
     init();
     getch();
-    do {
-        get_token();
-    }while(token!=TK_EOF);
-    printf("lines of code: %d line\n",line_num);
+    get_token();
+    translation_unit();
 
     cleanup();
     fclose(fin);
-    printf("%s 词法分析成功！",argv[1]);
+    printf("%s 语法分析成功！", argv[1]);
     return 0;
 }
 
