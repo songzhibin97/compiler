@@ -6,8 +6,7 @@ import (
 	"github.com/songzhibin97/compiler/simple_go_compiler/front_end"
 )
 
-// expr = var Identifier int ( = (Identifier | Digit) )
-
+// IntDeclareExec = var Identifier int ( = (Identifier | Digit) )
 func IntDeclareExec(t *front_end.TokenList) (*front_end.AstNode, error) {
 	f := t.Point()
 	var r *front_end.AstNode

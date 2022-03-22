@@ -28,7 +28,25 @@ type AstType int
 const (
 	IntDeclare AstType = iota
 	Child
+
+	ADD
+	SUB
+	MUL
+	QUO
 )
+
+func (t Token) Precedence() int {
+	if t.Type != Op {
+		return 0
+	}
+	switch t.Content {
+	case "+", "-":
+		return 4
+	case "*", "/":
+		return 5
+	}
+	return 0
+}
 
 type Matching struct {
 	source string
@@ -107,6 +125,10 @@ func (m *TokenList) Len() int {
 
 func (m *TokenList) Next() {
 	m.offset++
+}
+
+func (m *TokenList) Assertion(tk Status, op string) bool {
+	return m.Offset() < m.Len() && m.Point().GetType() == tk && m.Point().GetContent() == op
 }
 
 func InitTokenList(list []Token) *TokenList {
