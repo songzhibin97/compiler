@@ -1,6 +1,7 @@
 package front_end
 
 import (
+	"fmt"
 	"unicode"
 )
 
@@ -29,6 +30,7 @@ const (
 	IntDeclare AstType = iota
 	Child
 
+	Base
 	ADD
 	SUB
 	MUL
@@ -148,4 +150,28 @@ type AstNode struct {
 
 func CreateAstNode(t Token, ty AstType) *AstNode {
 	return &AstNode{Value: t, Type: ty}
+}
+
+func (a *AstNode) Print() {
+	dfs(a)
+}
+
+func dfs(node *AstNode) {
+	if node == nil {
+		return
+	}
+	dfs(node.Left)
+	switch node.Type {
+	case ADD:
+		fmt.Println("+")
+	case SUB:
+		fmt.Println("-")
+	case MUL:
+		fmt.Println("*")
+	case QUO:
+		fmt.Println("/")
+	case Base:
+		fmt.Println(node.Value.Content)
+	}
+	dfs(node.Right)
 }
