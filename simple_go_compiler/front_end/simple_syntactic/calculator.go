@@ -19,23 +19,21 @@ func add(t *front_end.TokenList) *front_end.AstNode {
 		return node
 	}
 
-	if t.Point().GetType() != front_end.Op {
-		panic("expire op")
-	}
-
 	switch t.Point().GetContent() {
 	case "+":
 		nNode := new(front_end.AstNode)
 		nNode.Type = front_end.ADD
-		node.Left = nNode
+		nNode.Left = node
 		t.Next()
 		node.Right = mul(t)
+		return nNode
 	case "-":
 		nNode := new(front_end.AstNode)
 		nNode.Type = front_end.SUB
-		node.Left = nNode
+		nNode.Left = node
 		t.Next()
 		node.Right = mul(t)
+		return nNode
 	}
 	return node
 }
@@ -83,15 +81,17 @@ func mul(t *front_end.TokenList) *front_end.AstNode {
 	case "*":
 		nNode := new(front_end.AstNode)
 		nNode.Type = front_end.MUL
-		node.Left = nNode
+		nNode.Left = node
 		t.Next()
 		node.Right = bracket(t)
+		return nNode
 	case "/":
 		nNode := new(front_end.AstNode)
 		nNode.Type = front_end.QUO
-		node.Left = nNode
+		nNode.Left = node
 		t.Next()
 		node.Right = bracket(t)
+		return nNode
 	}
 	return node
 }

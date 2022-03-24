@@ -37,6 +37,10 @@ func Parse(s *front_end.Matching) []front_end.Token {
 				t = front_end.Eq
 			case v == '+' || v == '-' || v == '*' || v == '/':
 				t = front_end.Op
+			case v == '(':
+				t = front_end.LeftParenthesis
+			case v == ')':
+				t = front_end.RightParenthesis
 			default:
 				panic("意外字符:" + string(v))
 			}
